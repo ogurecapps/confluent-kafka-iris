@@ -16,7 +16,7 @@ Method OnProcessInput(pInput As EnsLib.Kafka.Message, Output pOutput As Ens.Resp
 
 	For i=1:1:$LISTLENGTH(targets) {
 		Set target = $LISTGET(targets, i)
-		If ..Adapter.GuaranteeDelivery {
+		If ..Adapter.AtLeastOnce {
 			Set tSC = ..SendRequestSync(target, pInput, .pOutput) // We have no option to get a response when we use async sending in the Business Service
 		} Else {
 			Set tSC = ..SendRequestAsync(target, pInput)

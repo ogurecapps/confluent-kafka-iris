@@ -7,10 +7,10 @@ XData ProductionDefinition
   <Description></Description>
   <ActorPoolSize>2</ActorPoolSize>
   <Setting Target="Adapter" Name="ShutdownTimeout">30</Setting>
-  <Item Name="Kafka.Service.Consumer.Part1" Category="" ClassName="Kafka.Service.Consumer" PoolSize="1" Enabled="false" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+  <Item Name="Kafka.Service.Consumer.Part1" Category="" ClassName="Kafka.Service.Consumer" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
     <Setting Target="Adapter" Name="Partition">1</Setting>
     <Setting Target="Host" Name="TargetConfigNames">Sample.Process.MessageHandler</Setting>
-    <Setting Target="Adapter" Name="CallInterval">3600</Setting>
+    <Setting Target="Adapter" Name="CallInterval">5</Setting>
     <Setting Target="Adapter" Name="Servers">kafka:9092</Setting>
     <Setting Target="Adapter" Name="Topic">test</Setting>
   </Item>

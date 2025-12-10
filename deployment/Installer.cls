@@ -34,7 +34,7 @@ ClassMethod CreateDefaultConfigs() As %Status
     Set $NAMESPACE = "DEV"
 
     Do ##class(Ens.Util.LookupTable).%UpdateValue("Kafka.ProducerConfigs", "delivery.timeout.ms", "3000")
-	Do ##class(Ens.Util.LookupTable).%UpdateValue("Kafka.ConsumerConfigs", "auto.offset.reset", "smallest")
+	Do ##class(Ens.Util.LookupTable).%UpdateValue("Kafka.ConsumerConfigs", "auto.offset.reset", "earliest")
 
     Return $$$OK
 }

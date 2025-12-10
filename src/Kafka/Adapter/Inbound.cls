@@ -22,13 +22,16 @@ Property Partition As %Integer [ InitialExpression = 0 ];
 Property ConfigLookupTable As %String [ InitialExpression = "Kafka.ConsumerConfigs" ];
 
 /// If this option is enabled, IRIS will change the message offset in Kafka only after receiving a non-failure response from the target Business Host(s). 
-/// "At least once" type of guarantee if this option is enabled / "At most once" type of guarantee if this option is disabled (no garantee).
-Property GuaranteeDelivery As %Boolean;
+/// It means repeatedly pulling the same Kafka message until the message is successfully processed.
+Property AtLeastOnce As %Boolean;
 
-Parameter SETTINGS = "Topic:Kafka Settings,GroupID:Kafka Settings,ReceiveSettings:Kafka Settings,Partition:Kafka Settings,ConfigLookupTable:Kafka Settings,GuaranteeDelivery:Kafka Settings";
+Parameter SETTINGS = "Topic:Kafka Settings,GroupID:Kafka Settings,ReceiveSettings:Kafka Settings,Partition:Kafka Settings,ConfigLookupTable:Kafka Settings,AtLeastOnce:Kafka Settings";
 
 /// The Kafka Consumer
 Property Consumer As %SYS.Python [ Private ];
+
+/// Needed for committing the offset after message processing
+Property LastMessage As %SYS.Python [ Private ];
 
 /// Create the Kafka client here
 Method OnInit() As %Status
@@ -37,12 +40,9 @@ Method OnInit() As %Status
 	Return:$$$ISERR(tSC) tSC
 
 	Do ..OverrideByLocal(.config)
-	Do:..GroupID'="" config.setdefault("group.id", ..GroupID)
 
-	If ..GuaranteeDelivery {
-		Do config.setdefault("enable.auto.commit", ##class(%SYS.Python).True())
-		Do config.setdefault("enable.auto.offset.store", ##class(%SYS.Python).False())
-	}
+	Do:..GroupID'="" config.setdefault("group.id", ..GroupID)
+	Do:..AtLeastOnce config.setdefault("enable.auto.commit", ##class(%SYS.Python).False())
 
 	Try {Do ..CreateKafkaClient(config)} Catch ex {Set tSC = ex.AsStatus()}
 	
@@ -60,6 +60,14 @@ Method OnTearDown() As %Status
 
 Method CreateKafkaClient(config As %SYS.Python) [ Language = python ]
 {
+	def commit_completed(err, partitions):
+		if err:
+			self.Trace(f'Failed to commit offsets: {str(err)}')
+		else:
+			self.Trace(f'Committed partition offsets: {str(partitions)}')
+
+	config['on_commit'] = commit_completed
+	
 	if config['bootstrap.servers'] == '':
 		raise KafkaException('No Kafka servers configured (check \'bootstrap.servers\' in ConfigLookupTable or \'Servers\' in settings of Service)')
 	if self.Topic == '':
@@ -74,52 +82,68 @@ Method DestroyKafkaClient() [ Language = python ]
 	self.Consumer.close()
 }
 
+Method ResetKafkaClient() [ Language = python ]
+{
+	self.Consumer.seek(TopicPartition(self.Topic, self.Partition))
+}
+
+Method Trace(message As %String)
+{
+	$$$TRACE(message)
+}
+
 Method Poll() As EnsLib.Kafka.Message [ Language = python ]
 {
-	msg = self.Consumer.poll(timeout=0.1)
+	self.LastMessage = self.Consumer.poll(timeout=1.0)
 	
-	if msg is None: 
+	if self.LastMessage is None: 
+		self.Trace('No message received')
 		return ''
-	if msg.error():
-		if msg.error().code() == KafkaError._PARTITION_EOF:
+	if self.LastMessage.error():
+		if self.LastMessage.error().code() == KafkaError._PARTITION_EOF:
+			self.Trace('End of partition reached')
 			return ''
 		else:
-			raise KafkaException(msg.error())
-	
-	if not self.GuaranteeDelivery:
-		self.CommitOffset()
+			raise KafkaException(self.LastMessage.error())
 
 	input = iris.EnsLib.Kafka.Message._New()
-	input.topic = msg.topic()
-	input.key = msg.key().decode('utf-8')
-	input.value = msg.value().decode('utf-8')
+	input.topic = self.LastMessage.topic()
+	input.key = self.LastMessage.key().decode('utf-8')
+	input.value = self.LastMessage.value().decode('utf-8')
+	
+	self.Trace(f'Received message: {input.value}')
 
 	return input
 }
 
 Method CommitOffset() [ Language = python ]
 {
-	self.Consumer.commit(asynchronous=False)
+	self.Consumer.commit(message=self.LastMessage, asynchronous=False)
+	self.Trace(f'Message offset {self.LastMessage.offset()} commit manually')
 }
 
 Method OnTask() As %Status
 {
 	Set tSC = $$$OK
-	Set input = $$$NULLOREF
 	
-	Try {Set input = ..Poll()} Catch ex {Set tSC = ex.AsStatus()}
-	Return:$$$ISERR(tSC) tSC
-
-	If input '= $$$NULLOREF {
-		Set tSC = ..BusinessHost.ProcessInput(input)
-		
-		If ..GuaranteeDelivery && $$$ISOK(tSC) {
-			Try {Do ..CommitOffset()} Catch ex {Set tSC = ex.AsStatus()}	
-		}	
+	Try {
+		Set input = ..Poll()
+		If input '= $$$NULLOREF {
+			Set tSC = ..BusinessHost.ProcessInput(input)
+			If ..AtLeastOnce {
+				If $$$ISOK(tSC) {
+					Do ..CommitOffset()
+				} Else {
+					Do ..ResetKafkaClient()
+				}
+			}
+		}
+	} Catch ex {
+		Set tSC = ex.AsStatus()
 	}
-
-	Set ..BusinessHost.%WaitForNextCallInterval = 1
 	
+	Set ..BusinessHost.%WaitForNextCallInterval = 1
+
 	Return tSC
 }
 
