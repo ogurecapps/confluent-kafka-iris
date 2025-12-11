@@ -22,7 +22,7 @@ Property Partition As %Integer [ InitialExpression = 0 ];
 Property ConfigLookupTable As %String [ InitialExpression = "Kafka.ConsumerConfigs" ];
 
 /// If this option is enabled, IRIS will change the message offset in Kafka only after receiving a non-failure response from the target Business Host(s). 
-/// It means repeatedly pulling the same Kafka message until the message is successfully processed.
+/// It means repeatedly pulling the same Kafka message until the message is successfully delivered to its target.
 Property AtLeastOnce As %Boolean;
 
 Parameter SETTINGS = "Topic:Kafka Settings,GroupID:Kafka Settings,ReceiveSettings:Kafka Settings,Partition:Kafka Settings,ConfigLookupTable:Kafka Settings,AtLeastOnce:Kafka Settings";
@@ -72,6 +72,8 @@ Method CreateKafkaClient(config As %SYS.Python) [ Language = python ]
 		raise KafkaException('No Kafka servers configured (check \'bootstrap.servers\' in ConfigLookupTable or \'Servers\' in settings of Service)')
 	if self.Topic == '':
 		raise KafkaException('No Kafka topic configured (check \'Topic\' in settings of Service)')
+	if config['group.id'] == '':
+		raise KafkaException('No Kafka group ID configured (check \'group.id\' in ConfigLookupTable or \'GroupID\' in settings of Service)')
 
 	self.Consumer = Consumer(config)
 	self.Consumer.assign([TopicPartition(self.Topic, self.Partition)])
