@@ -1,4 +1,4 @@
-/// Use confluent-kafka-python library
+/// Used confluent-kafka-python library
 Class Kafka.Adapter.Outbound Extends (Kafka.Adapter.Common, Ens.OutboundAdapter)
 {
 

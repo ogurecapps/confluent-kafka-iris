@@ -25,4 +25,7 @@ The next one is `Kafka.Service.Consumer.Part1`, it reads partition 1 of the `tes
 Furthermore, the project has deployed Kafka UI. You can check topics, messages, consumers, and so on via the UI available at: `http://localhost:8080` (no need for authorization).
 
 ## Known issues
-Sometimes, the first run of the Consumer service causes a `Broker: Not coordinator` error. It is not related time passed from deploying Kafka or the topic creation... This error is gone after the business service restart. If somebody knows how to fix it, please feel free to message me. 
+Sometimes, the first run of the Consumer service causes a `Broker: Not coordinator` error. It is not related time passed from deploying Kafka or the topic creation... This error is gone after the business service restart. If somebody knows how to fix it, please feel free to message me.
+
+## What's new?
+In the inbound adapter class (`Kafka.Adapter.Inbound`), the `poll()` method, which received messages one at a time, has been replaced with the `consume()` method, which receives messages in batches.

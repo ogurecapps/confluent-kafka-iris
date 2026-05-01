@@ -1,11 +1,11 @@
-/// Use confluent-kafka-python library
+/// Used confluent-kafka-python library
 Class Kafka.Adapter.Inbound Extends (Kafka.Adapter.Common, Ens.InboundAdapter)
 {
 
-/// Topic that the messages are read from.
+/// Topic that the messages are read from
 Property Topic As %String(MAXLEN = 100);
 
-/// Kafka consumer group ID. Within the same group, each message is only read once.
+/// Kafka consumer group ID. Within the same group, each message is only read once
 Property GroupID As %String(MAXLEN = 100) [ InitialExpression = {"IRIS-"_$NAMESPACE} ];
 
 /// Deprecated. Use ConfigLookupTable instead
@@ -25,13 +25,16 @@ Property ConfigLookupTable As %String [ InitialExpression = "Kafka.ConsumerConfi
 /// It means repeatedly pulling the same Kafka message until the message is successfully delivered to its target.
 Property AtLeastOnce As %Boolean;
 
-Parameter SETTINGS = "Topic:Kafka Settings,GroupID:Kafka Settings,ReceiveSettings:Kafka Settings,Partition:Kafka Settings,ConfigLookupTable:Kafka Settings,AtLeastOnce:Kafka Settings";
+/// The maximum number of messages to process in one call interval
+Property BatchSize As %Integer [ InitialExpression = 100 ];
+
+Parameter SETTINGS = "Topic:Kafka Settings,GroupID:Kafka Settings,ReceiveSettings:Kafka Settings,Partition:Kafka Settings,ConfigLookupTable:Kafka Settings,AtLeastOnce:Kafka Settings,BatchSize:Kafka Settings";
 
 /// The Kafka Consumer
 Property Consumer As %SYS.Python [ Private ];
 
-/// Needed for committing the offset after message processing
-Property LastMessage As %SYS.Python [ Private ];
+/// Batch of messages received from the last consume() call
+Property MessageBatch As %SYS.Python [ Private ];
 
 /// Create the Kafka client here
 Method OnInit() As %Status
@@ -86,7 +89,11 @@ Method DestroyKafkaClient() [ Language = python ]
 
 Method ResetKafkaClient() [ Language = python ]
 {
-	self.Consumer.seek(TopicPartition(self.Topic, self.Partition))
+	tp = TopicPartition(self.Topic, self.Partition)
+	committed = self.Consumer.committed([tp])
+	if committed and committed[0].offset >= 0:
+		self.Consumer.seek(committed[0])
+		self.Trace(f'Reset to last committed offset {committed[0].offset}')
 }
 
 Method Trace(message As %String)
@@ -94,34 +101,39 @@ Method Trace(message As %String)
 	$$$TRACE(message)
 }
 
-Method Poll() As EnsLib.Kafka.Message [ Language = python ]
+/// Sets a received message batch to the class property and returns its size
+Method Consume() As %Integer [ Language = python ]
 {
-	self.LastMessage = self.Consumer.poll(timeout=1.0)
-	
-	if self.LastMessage is None: 
-		self.Trace('No message received')
-		return ''
-	if self.LastMessage.error():
-		if self.LastMessage.error().code() == KafkaError._PARTITION_EOF:
-			self.Trace('End of partition reached')
-			return ''
-		else:
-			raise KafkaException(self.LastMessage.error())
-
-	input = iris.EnsLib.Kafka.Message._New()
-	input.topic = self.LastMessage.topic()
-	input.key = self.LastMessage.key().decode('utf-8')
-	input.value = self.LastMessage.value().decode('utf-8')
-	
-	self.Trace(f'Received message: {input.value}')
-
-	return input
+	self.MessageBatch = self.Consumer.consume(num_messages=self.BatchSize, timeout=1.0)
+	return len(self.MessageBatch) if self.MessageBatch is not None else 0
 }
 
-Method CommitOffset() [ Language = python ]
+/// Returns EnsLib.Kafka.Message for the message at index, or empty string if it's an error/EOF
+Method BuildInput(index As %Integer) As EnsLib.Kafka.Message [ Language = python ]
 {
-	self.Consumer.commit(message=self.LastMessage, asynchronous=False)
-	self.Trace(f'Message offset {self.LastMessage.offset()} commit manually')
+    msg = self.MessageBatch[index]
+
+    if msg.error():
+        if msg.error().code() == KafkaError._PARTITION_EOF:
+            self.Trace('End of partition reached')
+            return ''
+        else:
+            raise KafkaException(msg.error())
+
+    input = iris.EnsLib.Kafka.Message._New()
+    input.topic = msg.topic()
+    input.key = msg.key().decode('utf-8')
+    input.value = msg.value().decode('utf-8')
+
+    self.Trace(f'Processing message: {input.value}')
+    return input
+}
+
+Method CommitOffset(index As %Integer) [ Language = python ]
+{
+	msg = self.MessageBatch[index]
+	self.Consumer.commit(message=msg, asynchronous=False)
+	self.Trace(f'Message offset {msg.offset()} commit manually')
 }
 
 Method OnTask() As %Status
@@ -129,14 +141,19 @@ Method OnTask() As %Status
 	Set tSC = $$$OK
 	
 	Try {
-		Set input = ..Poll()
-		If input '= $$$NULLOREF {
+		Set total = ..Consume()
+		$$$TRACE($$$FormatText("Received batch of %1 messages", total))
+		
+		For i=0:1:(total-1) {
+            Set input = ..BuildInput(i) Quit:input=""
+				
 			Set tSC = ..BusinessHost.ProcessInput(input)
 			If ..AtLeastOnce {
 				If $$$ISOK(tSC) {
-					Do ..CommitOffset()
+					Do ..CommitOffset(i)
 				} Else {
 					Do ..ResetKafkaClient()
+					Quit
 				}
 			}
 		}
@@ -145,7 +162,6 @@ Method OnTask() As %Status
 	}
 	
 	Set ..BusinessHost.%WaitForNextCallInterval = 1
-
 	Return tSC
 }
 
