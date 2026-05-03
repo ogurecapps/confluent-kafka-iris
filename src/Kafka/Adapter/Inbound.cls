@@ -87,10 +87,11 @@ Method DestroyKafkaClient() [ Language = python ]
 	self.Consumer.close()
 }
 
+/// After an error occurs, the read position in the Kafka client must be reset to the last successfully read position
 Method ResetKafkaClient() [ Language = python ]
 {
 	tp = TopicPartition(self.Topic, self.Partition)
-	committed = self.Consumer.committed([tp])
+	committed = self.Consumer.committed([tp], timeout=1.0)
 	if committed and committed[0].offset >= 0:
 		self.Consumer.seek(committed[0])
 		self.Trace(f'Reset to last committed offset {committed[0].offset}')
